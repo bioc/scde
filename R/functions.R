@@ -13,7 +13,6 @@
 ##' @docType package
 ##' @author Peter Kharchenko \email{Peter_Kharchenko@@hms.harvard.edu}
 ##' @author Jean Fan \email{jeanfan@@fas.harvard.edu}
-##' @import Rcpp RcppArmadillo mgcv Rook rjson MASS Cairo RColorBrewer edgeR quantreg methods nnet RMTstat extRemes pcaMethods BiocParallel parallel flexmix
 NULL
 
 ################################# Sample data
@@ -25,6 +24,7 @@ NULL
 ##' @name es.mef.small
 ##' @docType data
 ##' @references \url{http://www.ncbi.nlm.nih.gov/pubmed/21543516}
+##' @export
 NULL
 
 ##' Sample data
@@ -34,6 +34,7 @@ NULL
 ##' @name pollen
 ##' @docType data
 ##' @references \url{www.ncbi.nlm.nih.gov/pubmed/25086649}
+##' @export
 NULL
 
 ##' Sample error model
@@ -43,6 +44,7 @@ NULL
 ##' @name o.ifm
 ##' @docType data
 ##' @references \url{http://www.ncbi.nlm.nih.gov/pubmed/21543516}
+##' @export
 NULL
 
 ##' Sample error model
@@ -52,21 +54,93 @@ NULL
 ##' @name knn
 ##' @docType data
 ##' @references \url{www.ncbi.nlm.nih.gov/pubmed/25086649}
+##' @export
 NULL
 
-##' Internal model data
+# Internal model data
+#
+# Numerically-derived correction for NB->chi squared approximation stored as an local regression model
+#
+# @name scde.edff
+
+
+################################# Generic methods
+
+##' Filter GOs list
 ##'
-##' Numerically-derived correction for NB->chi squared approximation stored as an local regression model
+##' Filter GOs list and append GO names when appropriate
 ##'
-##' @name scde.edff
-##' @docType data
-NULL
+##' @param go.env GO or gene set list
+##' @param min.size Minimum size for number of genes in a gene set (default: 5)
+##' @param max.size Maximum size for number of genes in a gene set (default: 5000)
+##' @param annot Whether to append GO annotations for easier interpretation (default: FALSE)
+##'
+##' @return a filtered GO list
+##'
+##' @examples
+##' \donttest{
+##' # 10 sample GOs
+##' library(org.Hs.eg.db)
+##' go.env <- mget(ls(org.Hs.egGO2ALLEGS)[1:10], org.Hs.egGO2ALLEGS)
+##' # Filter this list and append names for easier interpretation
+##' go.env <- clean.gos(go.env)
+##' }
+##'
+##' @export
+clean.gos <- function(go.env, min.size = 5, max.size = 5000, annot = FALSE) {
+  go.env <- as.list(go.env)
+  size <- unlist(lapply(go.env, length))
+  go.env <- go.env[size > min.size & size < max.size]
+  # If we have GO.db installed, then add the term to each GO code.
+  if (annot && "GO.db" %in% installed.packages()[,1]) {
+    desc <- MASS::select(
+      GO.db,
+      keys = names(go.env),
+      columns = c("TERM"),
+      multiVals = 'CharacterList'
+    )
+    stopifnot(all(names(go.env) == desc$GOID))
+    names(go.env) <- paste(names(go.env), desc$TERM)
+  }
+  return(go.env)
+}
+
+
+##' Filter counts matrix
+##'
+##' Filter counts matrix based on gene and cell requirements
+##'
+##' @param counts read count matrix. The rows correspond to genes, columns correspond to individual cells
+##' @param min.lib.size Minimum number of genes detected in a cell. Cells with fewer genes will be removed (default: 1.8e3)
+##' @param min.reads Minimum number of reads per gene. Genes with fewer reads will be removed (default: 10)
+##' @param min.detected Minimum number of cells a gene must be seen in. Genes not seen in a sufficient number of cells will be removed (default: 5)
+##'
+##' @return a filtered read count matrix
+##'
+##' @examples
+##' data(pollen)
+##' dim(pollen)
+##' cd <- clean.counts(pollen)
+##' dim(cd)
+##'
+##' @export
+clean.counts <- function(counts, min.lib.size = 1.8e3, min.reads = 10, min.detected = 5) {
+    # filter out low-gene cells
+    counts <- counts[, colSums(counts>0)>min.lib.size]
+    # remove genes that don't have many reads
+    counts <- counts[rowSums(counts)>min.reads, ]
+    # remove genes that are not seen in a sufficient number of cells
+    counts <- counts[rowSums(counts>0)>min.detected, ]
+    return(counts)
+}
 
 ################################# SCDE Methods
 
 ##' Fit single-cell error/regression models
 ##'
 ##' Fit error models given a set of single-cell data (counts) and an optional grouping factor (groups). The cells (within each group) are first cross-compared to determine a subset of genes showing consistent expression. The set of genes is then used to fit a mixture model (Poisson-NB mixture, with expression-dependent concomitant).
+##'
+##' Note: the default implementation has been changed to use linear-scale fit with expression-dependent NB size (overdispersion) fit. This represents an interative improvement on the originally published model. Use linear.fit=F to revert back to the original fitting procedure.
 ##'
 ##' @param counts read count matrix. The rows correspond to genes (should be named), columns correspond to individual cells. The matrix should contain integer counts
 ##' @param groups an optional factor describing grouping of different cells. If provided, the cross-fits and the expected expression magnitudes will be determined separately within each group. The factor should have the same length as ncol(counts).
@@ -82,8 +156,8 @@ NULL
 ##' @param max.pairs maximum number of cross-fit comparisons that should be performed per group (default: 5000)
 ##' @param min.pairs.per.cell minimum number of pairs that each cell should be cross-compared with
 ##' @param verbose 1 for increased output
-##' @param linear.fit Boolean of whether to use a linear fit in the regression (default: TRUE)
-##' @param local.theta.fit Boolean of whether to fit the overdispersion parameter theta, ie. the negative binomial size parameter, based on local regression (default: TRUE)
+##' @param linear.fit Boolean of whether to use a linear fit in the regression (default: TRUE).
+##' @param local.theta.fit Boolean of whether to fit the overdispersion parameter theta, ie. the negative binomial size parameter, based on local regression (default: set to be equal to the linear.fit parameter)
 ##' @param theta.fit.range Range of valid values for the overdispersion parameter theta, ie. the negative binomial size parameter (default: c(1e-2, 1e2))
 ##'
 ##' @return a model matrix, with rows corresponding to different cells, and columns representing different parameters of the determined models
@@ -92,9 +166,7 @@ NULL
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' sg <- factor(gsub("(MEF|ESC).*", "\\1", colnames(cd)), levels = c("ESC", "MEF"))
 ##' names(sg) <- colnames(cd)
 ##' \donttest{
@@ -102,11 +174,16 @@ NULL
 ##' }
 ##'
 ##' @export
-scde.error.models <- function(counts, groups = NULL, min.nonfailed = 3, threshold.segmentation = TRUE, min.count.threshold = 4, zero.count.threshold = min.count.threshold, zero.lambda = 0.1, save.crossfit.plots = FALSE, save.model.plots = TRUE, n.cores = 12, min.size.entries = 2e3, max.pairs = 5000, min.pairs.per.cell = 10, verbose = 0, linear.fit = TRUE, local.theta.fit = TRUE, theta.fit.range = c(1e-2, 1e2)) {
+scde.error.models <- function(counts, groups = NULL, min.nonfailed = 3, threshold.segmentation = TRUE, min.count.threshold = 4, zero.count.threshold = min.count.threshold, zero.lambda = 0.1, save.crossfit.plots = FALSE, save.model.plots = TRUE, n.cores = 12, min.size.entries = 2e3, max.pairs = 5000, min.pairs.per.cell = 10, verbose = 0, linear.fit = TRUE, local.theta.fit = linear.fit, theta.fit.range = c(1e-2, 1e2)) {
     # default same group
     if(is.null(groups)) {
         groups <- as.factor(rep("cell", ncol(counts)))
     }
+    # check for integer counts
+    if(any(!unlist(lapply(counts,is.integer)))) {
+      stop("Some of the supplied counts are not integer values (or stored as non-integer types). Aborting!\nThe method is designed to work on read counts - do not pass normalized read counts (e.g. FPKM values). If matrix contains read counts, but they are stored as numeric values, use counts<-apply(counts,2,function(x) {storage.mode(x) <- 'integer'; x}) to recast.");
+    }
+
     # crossfit
     if(verbose) {
         cat("cross-fitting cells.\n")
@@ -140,9 +217,7 @@ scde.error.models <- function(counts, groups = NULL, min.nonfailed = 3, threshol
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' data(o.ifm)  # Load precomputed model. Use ?scde.error.models to see how o.ifm was generated
 ##' o.prior <- scde.expression.prior(models = o.ifm, counts = cd, length.out = 400, show.plot = FALSE)
 ##'
@@ -212,9 +287,7 @@ scde.expression.prior <- function(models, counts, length.out = 400, show.plot = 
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' sg <- factor(gsub("(MEF|ESC).*", "\\1", colnames(cd)), levels = c("ESC", "MEF"))
 ##' names(sg) <- colnames(cd)
 ##' \donttest{
@@ -345,7 +418,7 @@ scde.expression.difference <- function(models, counts, prior, groups = NULL, bat
 ##' @param prior prior
 ##' @param groups group information
 ##' @param batch batch information
-##' @param geneLookupURL The URL that will be used to construct links to view more information on gene names. By default (if can't guess the organism) the links will forward.D to ENSEMBL site search, using \code{geneLookupURL = "http://useast.ensembl.org/Multi/Search/Results?q = {0}"}. The "{0}" in the end will be substituted with the gene name. For instance, to link to GeneCards, use \code{"http://www.genecards.org/cgi-bin/carddisp.pl?gene = {0}"}.
+##' @param geneLookupURL The URL that will be used to construct links to view more information on gene names. By default (if can't guess the organism) the links will forward to ENSEMBL site search, using \code{geneLookupURL = "http://useast.ensembl.org/Multi/Search/Results?q = {0}"}. The "{0}" in the end will be substituted with the gene name. For instance, to link to GeneCards, use \code{"http://www.genecards.org/cgi-bin/carddisp.pl?gene = {0}"}.
 ##' @param server optional previously returned instance of the server, if want to reuse it.
 ##' @param name app name (needs to be altered only if adding more than one app to the server using \code{server} parameter)
 ##' @param port Interactive browser port
@@ -354,9 +427,7 @@ scde.expression.difference <- function(models, counts, prior, groups = NULL, bat
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' sg <- factor(gsub("(MEF|ESC).*", "\\1", colnames(cd)), levels = c("ESC", "MEF"))
 ##' names(sg) <- colnames(cd)
 ##' \donttest{
@@ -404,6 +475,12 @@ scde.browse.diffexp <- function(results, models, counts, prior, groups = NULL, b
 ##'
 ##' @export
 show.app <- function(app, name, browse = TRUE, port = NULL, ip = '127.0.0.1', server = NULL) {
+    # replace special characters
+    name <- gsub("[^[:alnum:]]", "_", name)
+    
+    if (tools:::httpdPort() !=0 && tools:::httpdPort() != port) {
+        cat("ERROR: port is already being used. The PAGODA app is currently incompatible with RStudio. Please try running the interactive app in the R console.")
+    }
     if(is.null(server)) { server <- get.scde.server(port) }
     server$add(app = app, name = name)
     if(browse) {
@@ -416,7 +493,7 @@ get.scde.server <- function(port = NULL, ip = '127.0.0.1') {
     if(exists("___scde.server", envir = globalenv())) {
         server <- get("___scde.server", envir = globalenv())
     } else {
-#        require(Rook)
+        require(Rook)
         server <- Rhttpd$new()
         assign("___scde.server", server, envir = globalenv())
         server$start(listen = ip, port = port)
@@ -450,9 +527,7 @@ get.scde.server <- function(port = NULL, ip = '127.0.0.1') {
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' data(o.ifm)  # Load precomputed model. Use ?scde.error.models to see how o.ifm was generated
 ##' o.prior <- scde.expression.prior(models = o.ifm, counts = cd, length.out = 400, show.plot = FALSE)
 ##' # calculate joint posteriors
@@ -501,7 +576,7 @@ scde.posteriors <- function(models, counts, prior, n.randomizations = 100, batch
 
     chunk <- function(x, n) split(x, sort(rank(x) %% n.cores))
     if(n.cores > 1 && nrow(counts) > n.cores) { # split by genes
-        xl <- bplapply(chunk(seq_len(nrow(counts)), n.cores), function(ii) {
+        xl <- papply(chunk(seq_len(nrow(counts)), n.cores), function(ii) {
             ucl <- lapply(seq_len(ncol(counts)), function(i) as.vector(unique(counts[ii, i, drop = FALSE])))
             uci <- do.call(cbind, lapply(seq_len(ncol(counts)), function(i) match(counts[ii, i, drop = FALSE], ucl[[i]])-1))
             #x <- logBootPosterior(models, ucl, uci, marginals, n.randomizations, 1, postflag)
@@ -510,7 +585,7 @@ scde.posteriors <- function(models, counts, prior, n.randomizations = 100, batch
             } else {
                 x <- .Call("logBootPosterior", mm, ucl, uci, marginals, n.randomizations, ii[1], postflag, localthetaflag, squarelogitconc, ensembleflag, PACKAGE = "scde")
             }
-        }, BPPARAM = MulticoreParam(workers = n.cores))
+        }, n.cores = n.cores)
         if(postflag == 0) {
             x <- do.call(rbind, xl)
         } else if(postflag == 1) {
@@ -581,12 +656,10 @@ scde.posteriors <- function(models, counts, prior, n.randomizations = 100, batch
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' data(o.ifm)  # Load precomputed model. Use ?scde.error.models to see how o.ifm was generated
 ##' # get expression magnitude estimates
-##' fpm <- scde.expression.magnitude(o.ifm, cd)
+##' lfpm <- scde.expression.magnitude(o.ifm, cd)
 ##'
 ##' @export
 scde.expression.magnitude <- function(models, counts) {
@@ -609,9 +682,7 @@ scde.expression.magnitude <- function(models, counts) {
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' data(o.ifm)  # Load precomputed model. Use ?scde.error.models to see how o.ifm was generated
 ##' o.prior <- scde.expression.prior(models = o.ifm, counts = cd, length.out = 400, show.plot = FALSE)
 ##' # calculate probability of observing a drop out at a given set of magnitudes in different cells
@@ -673,9 +744,7 @@ scde.failure.probability <- function(models, magnitudes = NULL, counts = NULL) {
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' data(o.ifm)  # Load precomputed model. Use ?scde.error.models to see how o.ifm was generated
 ##' o.prior <- scde.expression.prior(models = o.ifm, counts = cd, length.out = 400, show.plot = FALSE)
 ##' scde.test.gene.expression.difference("Tdh", models = o.ifm, counts = cd, prior = o.prior)
@@ -868,9 +937,7 @@ scde.test.gene.expression.difference <- function(gene, models, counts, prior, gr
 ##'
 ##' @examples
 ##' data(es.mef.small)
-##' cd <- es.mef.small
-##' cd <- cd[rowSums(cd) > 0, ]
-##' cd <- cd[, colSums(cd) > 1e4]
+##' cd <- clean.counts(es.mef.small, min.lib.size=1000, min.reads = 1, min.detected = 1)
 ##' \donttest{
 ##' o.ifm <- scde.error.models(counts = cd, groups = sg, n.cores = 10, threshold.segmentation = TRUE)
 ##' o.prior <- scde.expression.prior(models = o.ifm, counts = cd, length.out = 400, show.plot = FALSE)
@@ -886,11 +953,10 @@ scde.test.gene.expression.difference <- function(gene, models, counts, prior, gr
 ##'
 ##' @export
 scde.fit.models.to.reference <- function(counts, reference, n.cores = 10, zero.count.threshold = 1, nrep = 1, save.plots = FALSE, plot.filename = "reference.model.fits.pdf", verbose = 0, min.fpm = 1) {
-    old.fit <- TRUE
     return.compressed.models <- TRUE
     verbose <- 1
     ids <- colnames(counts)
-    ml <- bplapply(seq_along(ids), function(i) {
+    ml <- papply(seq_along(ids), function(i) {
         df <- data.frame(count = counts[, ids[i]], fpm = reference/sum(reference)*1e6)
         df <- df[df$fpm > min.fpm, ]
         m1 <- fit.nb2.mixture.model(df, nrep = nrep, verbose = verbose, zero.count.threshold = zero.count.threshold)
@@ -903,7 +969,7 @@ scde.fit.models.to.reference <- function(counts, reference, n.cores = 10, zero.c
         } else {
             return(m1)
         }
-    }, BPPARAM = MulticoreParam(workers = n.cores))
+    }, n.cores = n.cores)
     names(ml) <- ids
 
     # check if there were errors in the multithreaded portion
@@ -918,16 +984,14 @@ scde.fit.models.to.reference <- function(counts, reference, n.cores = 10, zero.c
     if(save.plots) {
         # model fits
         #CairoPNG(file = paste(group, "model.fits.png", sep = "."), width = 1024, height = 300*length(ids))
-        pdf(file = plot.filename, width = ifelse(old.fit, 13, 15), height = 4)
+        pdf(file = plot.filename, width = 13, height = 4)
         #l <- layout(matrix(seq(1, 4*length(ids)), nrow = length(ids), byrow = TRUE), rep(c(1, 1, 1, 0.5), length(ids)), rep(1, 4*length(ids)), FALSE)
-        l <- layout(matrix(seq(1, 4), nrow = 1, byrow = TRUE), rep(c(1, 1, 1, ifelse(old.fit, 0.5, 1)), 1), rep(1, 4), FALSE)
+        l <- layout(matrix(seq(1, 4), nrow = 1, byrow = TRUE), rep(c(1, 1, 1, 0.5), 1), rep(1, 4), FALSE)
         par(mar = c(3.5, 3.5, 3.5, 0.5), mgp = c(2.0, 0.65, 0), cex = 0.9)
         invisible(lapply(seq_along(ids), function(i) {
             df <- data.frame(count = counts[, ids[i]], fpm = reference/sum(reference)*1e6)
             df <- df[df$fpm > min.fpm, ]
-            if(old.fit) {
-                plot.nb2.mixture.fit(ml[[i]], df, en = ids[i], do.par = FALSE, compressed.models = return.compressed.models)
-            }
+            plot.nb2.mixture.fit(ml[[i]], df, en = ids[i], do.par = FALSE, compressed.models = return.compressed.models)
         }))
         dev.off()
     }
@@ -1055,10 +1119,7 @@ winsorize.matrix <- function(mat, trim) {
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' }
@@ -1066,6 +1127,11 @@ winsorize.matrix <- function(mat, trim) {
 ##' @export
 knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), min.nonfailed = 5, min.count.threshold = 1, save.model.plots = TRUE, max.model.plots = 50, n.cores = parallel::detectCores(), min.size.entries = 2e3, min.fpm = 0, cor.method = "pearson", verbose = 0, fpm.estimate.trim = 0.25, linear.fit = TRUE, local.theta.fit = linear.fit, theta.fit.range = c(1e-2, 1e2), alpha.weight.power = 1/2) {
     threshold.prior = 1-1e-6
+
+    # check for integer counts
+    if(any(!unlist(lapply(counts,is.integer)))) {
+      stop("Some of the supplied counts are not integer values (or stored as non-integer types). Aborting!\nThe method is designed to work on read counts - do not pass normalized read counts (e.g. FPKM values). If matrix contains read counts, but they are stored as numeric values, use counts<-apply(counts,2,function(x) {storage.mode(x) <- 'integer'; x}) to recast.");
+    }
 
     # TODO:
     #  - implement check for k >= n.cells (to avoid correlation calculations)
@@ -1118,7 +1184,7 @@ knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), m
 
         if(verbose)  message(paste("fitting", group, "models:"))
 
-        ml <- bplapply(seq_along(ids), function(i) {
+        ml <- papply(seq_along(ids), function(i) { try({
             if(verbose)  message(paste(group, '.', i, " : ", ids[i], sep = ""))
             # determine k closest cells
             oc <- ids[-i][order(celld[ids[i], -i, drop = FALSE], decreasing = TRUE)[1:min(k, length(ids)-1)]]
@@ -1150,33 +1216,29 @@ knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), m
             #plot.nb2.mixture.fit(m1, df, en = ids[i], do.par = FALSE, compressed.models = TRUE)
             return(m1)
             #})
-        }, BPPARAM = MulticoreParam(workers = n.cores))
-        names(ml) <- ids
-        # check for failed cells
-        vci <- unlist(lapply(seq_along(ml), function(i) {
+        })}, n.cores = n.cores)
+        vic <- which(unlist(lapply(seq_along(ml), function(i) {
             if(class(ml[[i]]) == "try-error") {
-                message("ERROR encountered in building a model for cell ", ids[i], ":")
+                message("ERROR encountered in building a model for cell ", ids[i], " - skipping the cell. Error:")
                 message(ml[[i]])
-                return(FALSE)
-            } else {
-                return(TRUE)
+                #tryCatch(stop(paste("ERROR encountered in building a model for cell ", ids[i])), error = function(e) stop(e))
+                return(FALSE);
             }
-        }))
+            return(TRUE);
+        })))
+        ml <- ml[vic]; names(ml) <- ids[vic];
 
-        if(any(!vci)) {
-            message("ERROR fitting of ", sum(!vci), " out of ", length(vci), " cells resulted in errors reporting remaining ", sum(vci), " cells")
+        if(length(vic)<length(ids)) {
+          message("ERROR fitting of ", (length(ids)-length(vic)), " out of ", length(ids), " cells resulted in errors reporting remaining ", length(vic), " cells")
         }
-        ml <- ml[vci]
-        mli <- which(vci)
-        if(length(mli) > 0) {
-            if(save.model.plots) {
+        if(length(vic)<length(ids)) {
                 # model fits
                 if(verbose)  message("plotting ", group, " model fits... ")
                 tryCatch( {
                     pdf(file = paste(group, "model.fits.pdf", sep = "."), width = ifelse(local.theta.fit, 13, 15), height = 4)
                     l <- layout(matrix(seq(1, 4), nrow = 1, byrow = TRUE), rep(c(1, 1, 1, ifelse(local.theta.fit, 1, 0.5)), 1), rep(1, 4), FALSE)
                     par(mar = c(3.5, 3.5, 3.5, 0.5), mgp = c(2.0, 0.65, 0), cex = 0.9)
-                    invisible(lapply(mli[1:min(max.model.plots, length(mli))], function(i) {
+                    invisible(lapply(vic[1:min(max.model.plots, length(vic))], function(i) {
                         oc <- ids[-i][order(celld[ids[i], -i, drop = FALSE], decreasing = TRUE)[1:min(k, length(ids)-1)]]
                         #set.seed(i) oc <- sample(ids[-i], k)
                         # determine a subset of genes that show up sufficiently often
@@ -1192,7 +1254,6 @@ knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), m
                     message(e)
                     dev.off()
                 })
-            }
         }
 
         return(ml)
@@ -1234,10 +1295,7 @@ knn.error.models <- function(counts, groups = NULL, k = round(ncol(counts)/2), m
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
@@ -1426,7 +1484,7 @@ pagoda.varnorm <- function(models, counts, batch = NULL, trim = 0, prior = NULL,
     ids <- 1:ncol(cd)
     names(ids) <- colnames(cd)
     # dataset-wide version
-    edf.mat <- do.call(cbind, bplapply(ids, function(i) {
+    edf.mat <- do.call(cbind, papply(ids, function(i) {
         v <- models[i, ]
         lfpm <- log(avmodes)
         mu <- exp(lfpm*v$corr.a + v$corr.b)
@@ -1436,7 +1494,7 @@ pagoda.varnorm <- function(models, counts, batch = NULL, trim = 0, prior = NULL,
         edf <- exp(predict(scde.edff, data.frame(lt = log(thetas))))
         edf[thetas > 1e3] <- 1
         edf
-    }, BPPARAM = MulticoreParam(workers = n.cores)))
+    }, n.cores = n.cores))
     if(edf.damping != 1) {
         edf.mat <- ((edf.mat/ncol(edf.mat))^edf.damping) * ncol(edf.mat)
     }
@@ -1450,7 +1508,7 @@ pagoda.varnorm <- function(models, counts, batch = NULL, trim = 0, prior = NULL,
 
     # batch-specific version if necessary
     if(!is.null(batch) && is.list(modes)) { # batch-specific mode
-        bedf.mat <- do.call(cbind, bplapply(ids, function(i) {
+        bedf.mat <- do.call(cbind, papply(ids, function(i) {
             v <- models[i, ]
             lfpm <- log(modes[[batch[i]]])
             mu <- exp(lfpm*v$corr.a + v$corr.b)
@@ -1460,7 +1518,7 @@ pagoda.varnorm <- function(models, counts, batch = NULL, trim = 0, prior = NULL,
             edf <- exp(predict(scde.edff, data.frame(lt = log(thetas))))
             edf[thetas > 1e3] <- 1
             return(edf)
-        }, BPPARAM = MulticoreParam(workers = n.cores)))
+        }, n.cores = n.cores))
         if(edf.damping != 1) { bedf.mat <-  ((bedf.mat/ncol(bedf.mat))^edf.damping) * ncol(edf.mat) }
 
         # incorporate weight into edf
@@ -1476,7 +1534,7 @@ pagoda.varnorm <- function(models, counts, batch = NULL, trim = 0, prior = NULL,
     # evaluate negative binomial deviations and effective degrees of freedom
     ids <- 1:ncol(cd)
     names(ids) <- colnames(cd)
-    mat <- do.call(cbind, bplapply(ids, function(i) {
+    mat <- do.call(cbind, papply(ids, function(i) {
         v <- models[i, ]
         lfpm <- log(avmodes)
         mu <- exp(lfpm*v$corr.a + v$corr.b)
@@ -1492,12 +1550,12 @@ pagoda.varnorm <- function(models, counts, batch = NULL, trim = 0, prior = NULL,
         edf.mat[, i]*(cd[, i]-mu)^2/(mu+mu^2/thetas +  fail.lambda)
 
         #edf.mat[, i]*(cd[, i]-mu)^2/(matw[, i]*mu+(mu^2)*((1-matw[, i])+matw[, i]/thetas))
-    }, BPPARAM = MulticoreParam(workers = n.cores)))
+    }, n.cores = n.cores))
     rownames(mat) <- rownames(cd)
     if(verbose) { cat(".") }
     # batch-specific version of mat
     if(!is.null(batch) && is.list(modes)) { # batch-specific mode
-        bmat <- do.call(cbind, bplapply(ids, function(i) {
+        bmat <- do.call(cbind, papply(ids, function(i) {
             v <- models[i, ]
             lfpm <- log(modes[[batch[i]]])
             mu <- exp(lfpm*v$corr.a + v$corr.b)
@@ -1511,7 +1569,7 @@ pagoda.varnorm <- function(models, counts, batch = NULL, trim = 0, prior = NULL,
             fail.lambda <- exp(as.numeric(v["fail.r"]))
             #edf.mat[, i]*(cd[, i]-mu)^2/(matw[, i]*(mu+mu^2/thetas) + (1-matw[, i])*((mu-fail.lambda)^2 + fail.lambda))
             edf.mat[, i]*(cd[, i]-mu)^2/(mu+mu^2/thetas +  fail.lambda)
-        }, BPPARAM = MulticoreParam(workers = n.cores)))
+        }, n.cores = n.cores))
         rownames(bmat) <- rownames(cd)
 
         if(verbose) { cat(".") }
@@ -1738,25 +1796,21 @@ pagoda.varnorm <- function(models, counts, batch = NULL, trim = 0, prior = NULL,
 ##' @return a modified varinfo object with adjusted expression matrix (varinfo$mat)
 ##'
 ##' @examples
-##' \donttest{
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
+##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
 ##' # create go environment
 ##' library(org.Hs.eg.db)
+##' # translate gene names to ids
 ##' ids <- unlist(lapply(mget(rownames(cd), org.Hs.egALIAS2EG, ifnotfound = NA), function(x) x[1]))
-##' rids <- names(ids)
-##' names(rids) <- ids
-##' go.env <- eapply(org.Hs.egGO2ALLEGS, function(x) as.character(na.omit(rids[x])))
-##' go.env <- go.env[unlist(lapply(go.env, length))>5]
-##' library(GO.db)
-##' desc <- unlist(lapply(mget(names(go.env), GOTERM, ifnotfound = NA), function(x) if(is.logical(x)) { return("") } else { slot(x, "Term")}))
-##' names(go.env) <- paste(names(go.env), desc)  # append description to the names
-##' go.env <- list2env(go.env)  # convert to an environment
+##' rids <- names(ids); names(rids) <- ids
+##' go.env <- lapply(mget(ls(org.Hs.egGO2ALLEGS), org.Hs.egGO2ALLEGS), function(x) as.character(na.omit(rids[x])))
+##' # clean GOs
+##' go.env <- clean.gos(go.env)
+##' # convert to an environment
+##' go.env <- list2env(go.env)
 ##' # subtract the pattern
 ##' cc.pattern <- pagoda.show.pathways(ls(go.env)[1:2], varinfo, go.env, show.cell.dendrogram = TRUE, showRowLabels = TRUE)  # Look at pattern from 2 GO annotations
 ##' varinfo.cc <- pagoda.subtract.aspect(varinfo, cc.pattern)
@@ -1802,24 +1856,20 @@ pagoda.subtract.aspect <- function(varinfo, aspect, center = TRUE) {
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
 ##' # create go environment
 ##' library(org.Hs.eg.db)
+##' # translate gene names to ids
 ##' ids <- unlist(lapply(mget(rownames(cd), org.Hs.egALIAS2EG, ifnotfound = NA), function(x) x[1]))
-##' rids <- names(ids)
-##' names(rids) <- ids
-##' go.env <- eapply(org.Hs.egGO2ALLEGS, function(x) as.character(na.omit(rids[x])))
-##' go.env <- go.env[unlist(lapply(go.env, length))>5]
-##' library(GO.db)
-##' desc <- unlist(lapply(mget(names(go.env), GOTERM, ifnotfound = NA), function(x) if(is.logical(x)) { return("") } else { slot(x, "Term")}))
-##' names(go.env) <- paste(names(go.env), desc)  # append description to the names
-##' go.env <- list2env(go.env)  # convert to an environment
+##' rids <- names(ids); names(rids) <- ids
+##' go.env <- lapply(mget(ls(org.Hs.egGO2ALLEGS), org.Hs.egGO2ALLEGS), function(x) as.character(na.omit(rids[x])))
+##' # clean GOs
+##' go.env <- clean.gos(go.env)
+##' # convert to an environment
+##' go.env <- list2env(go.env)
 ##' pwpca <- pagoda.pathway.wPCA(varinfo, go.env, n.components=1, n.cores=10, n.internal.shuffles=50)
 ##' }
 ##'
@@ -1861,7 +1911,7 @@ pagoda.pathway.wPCA <- function(varinfo, setenv, n.components = 2, n.cores = det
     mat <- t(mat)
     matw <- t(matw)
 
-    mcm.pc <- bplapply(gsl, function(x) {
+    mcm.pc <- papply(gsl, function(x) {
         lab <- proper.gene.names %in% get(x, envir = setenv)
         if(sum(lab)<1) { return(NULL) }
 
@@ -1891,7 +1941,7 @@ pagoda.pathway.wPCA <- function(varinfo, setenv, n.components = 2, n.cores = det
         xv <- t(xp$scores)
         xv <- xv/apply(xv, 1, sd)*sqrt(avar)
         return(list(xv = xv, xp = xp, z = z, sd = xp$sd, n = ngenes))
-    }, BPPARAM = MulticoreParam(workers = n.cores))
+    }, n.cores = n.cores)
 }
 
 
@@ -1908,10 +1958,7 @@ pagoda.pathway.wPCA <- function(varinfo, setenv, n.components = 2, n.cores = det
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
@@ -1970,10 +2017,7 @@ pagoda.effective.cells <- function(pwpca, start = NULL) {
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
@@ -2034,7 +2078,7 @@ pagoda.gene.clusters <- function(varinfo, trim = 3.1/ncol(varinfo$mat), n.cluste
         # determine PC1 for the actual clusters
         if(verbose) { cat (" cluster PCA ...")}
         il <- tapply(vi, factor(gcll, levels = c(1:length(gcls))), I)
-        cl.goc <- bplapply(il, function(ii) {
+        cl.goc <- papply(il, function(ii) {
             xp <- bwpca(t(mat[ii, , drop = FALSE]), t(matw[ii, , drop = FALSE]), npcs = n.components, center = FALSE, nstarts = n.starts, smooth = smooth, n.shuffles = n.internal.shuffles)
 
             cs <- unlist(lapply(seq_len(ncol(xp$scores)), function(i) sign(cor(xp$scores[, i], colMeans(mat[ii, , drop = FALSE]*abs(xp$rotation[, i]))))))
@@ -2043,7 +2087,7 @@ pagoda.gene.clusters <- function(varinfo, trim = 3.1/ncol(varinfo$mat), n.cluste
             xp$rotation <- t(t(xp$rotation)*cs)
 
             return(list(xp = xp, sd = xp$sd, n = length(ii)))
-        }, BPPARAM = MulticoreParam(workers = n.cores))
+        }, n.cores = n.cores)
         names(cl.goc) <- paste("geneCluster", names(cl.goc), sep = ".")
 
         if(verbose) { cat ("done\n")}
@@ -2054,7 +2098,7 @@ pagoda.gene.clusters <- function(varinfo, trim = 3.1/ncol(varinfo$mat), n.cluste
         if(verbose) { cat ("reusing old results for the sampled clusters\n")}
         varm <- old.results$varm } else {
             if(verbose) { cat ("generating", n.samples, "randomized samples ")}
-            varm <- do.call(rbind, bplapply(seq_len(n.samples), function(i) { # each sampling iteration
+            varm <- do.call(rbind, papply(seq_len(n.samples), function(i) { # each sampling iteration
                 set.seed(i)
                 # generate random normal matrix
                 # TODO: use n.cells instead of ncol(matw)
@@ -2115,7 +2159,7 @@ pagoda.gene.clusters <- function(varinfo, trim = 3.1/ncol(varinfo$mat), n.cluste
                 if(verbose) { cat (".")}
                 data.frame(n = as.integer(pathsizes), var = unlist(sdv), round = i)
 
-            }, BPPARAM = MulticoreParam(workers = n.cores)))
+            }, n.cores = n.cores))
             if(verbose) { cat ("done\n")}
         }
 
@@ -2137,7 +2181,7 @@ pagoda.gene.clusters <- function(varinfo, trim = 3.1/ncol(varinfo$mat), n.cluste
     xf <- extRemes::fevd(varm$varst, type = "Gumbel") # fit on all clusters
 
     if(plot) {
-#        require(extRemes)
+        require(extRemes)
         par(mfrow = c(1, 2), mar = c(3.5, 3.5, 3.5, 1.0), mgp = c(2, 0.65, 0), cex = 0.9)
         smoothScatter(varm$n, varm$var, main = "simulations", xlab = "cluster size", ylab = "PC1 variance")
         if(show.random) {
@@ -2191,10 +2235,7 @@ pagoda.gene.clusters <- function(varinfo, trim = 3.1/ncol(varinfo$mat), n.cluste
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
@@ -2405,10 +2446,7 @@ pagoda.top.aspects <- function(pwpca, clpca = NULL, n.cells = NULL, z.score = qn
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
@@ -2476,10 +2514,7 @@ pagoda.reduce.loading.redundancy <- function(tam, pwpca, clpca = NULL, plot = FA
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
@@ -2561,10 +2596,7 @@ pagoda.reduce.redundancy <- function(tamr, distance.threshold = 0.2, cluster.met
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
@@ -2628,10 +2660,7 @@ pagoda.cluster.cells <- function(tam, varinfo, method = "ward.D", include.aspect
 ##'
 ##' @examples
 ##' data(pollen)
-##' cd <- pollen
-##' cd <- cd[,colSums(cd>0)>1.8e3]
-##' cd <- cd[rowSums(cd)>10,]
-##' cd <- cd[rowSums(cd>0)>5,]
+##' cd <- clean.counts(pollen)
 ##' \donttest{
 ##' knn <- knn.error.models(cd, k=ncol(cd)/4, n.cores=10, min.count.threshold=2, min.nonfailed=5, max.model.plots=10)
 ##' varinfo <- pagoda.varnorm(knn, counts = cd, trim = 3/ncol(cd), max.adj.var = 5, n.cores = 1, plot = FALSE)
@@ -2901,7 +2930,7 @@ calculate.crossfit.models <- function(counts, groups, min.count.threshold = 4, n
 
     if(dim(cl)[2] > 0) {
         if(verbose)  message(paste("cross-fitting", ncol(cl), "pairs:"))
-        rl <- bplapply(seq_len(ncol(cl)), function(cii) {
+        rl <- papply(seq_len(ncol(cl)), function(cii) {
             ii <- cl[, cii]
             df <- data.frame(c1 = counts[, ii[1]], c2 = counts[, ii[2]])
             vi <- which(rowSums(df) > 0, )
@@ -2954,7 +2983,7 @@ calculate.crossfit.models <- function(counts, groups, min.count.threshold = 4, n
             rli <- list(ii = ii, clusters = cl, posterior = pm, vi = vi)
             #message("return object size for pair [", paste(ii, collapse = " "), "] is ", round(object.size(rli)/(1024^2), 3), " MB")
             return(rli)
-        }, BPPARAM = MulticoreParam(workers = round(n.cores/nrep)))
+        }, n.cores = round(n.cores/nrep))
         #, mc.preschedule = threshold.segmentation) # mclapply function has preschedule
         names(rl) <- apply(cl, 2, paste, collapse = ".vs.")
         # clean up invalid entries
@@ -2994,7 +3023,7 @@ calculate.crossfit.models <- function(counts, groups, min.count.threshold = 4, n
             t.panel.component.scatter <- function(x, y, i, j, cex = 0.8, ...) {
                 if(!is.null(rl[[paste(ids[i], "vs", ids[j], sep = ".")]])) {
                     m1 <- rl[[paste(ids[i], "vs", ids[j], sep = ".")]]
-                    # forward.D plot
+                    # forward plot
                     vi <- which(x > 0 | y > 0)
                     ci <- vi[m1$clusters == 1]
                     if(length(ci) > 3) {
@@ -3140,7 +3169,7 @@ calculate.individual.models <- function(counts, groups, cfm, nrep = 1, verbose =
         # incorporate cross-fit pairs from cfm
         pn1 <- unlist(apply(cl, 2, function(ii) paste(ii, collapse = ".vs.")))
         pn2 <- unlist(apply(cl, 2, function(ii) paste(rev(ii), collapse = ".vs."))) ### %%% use rev() to revert element order
-        vi <- (pn1 %in% names(cfm)) | (pn2 %in% names(cfm)) # check both reverse and forward.D pairing
+        vi <- (pn1 %in% names(cfm)) | (pn2 %in% names(cfm)) # check both reverse and forward pairing
         #if(!all(vi)) stop("unable to find cross-fit models for the following pairs : ", paste(pn1[!vi]))
         if(!all(vi)) {
             if(verbose > 0) {
@@ -3189,7 +3218,7 @@ calculate.individual.models <- function(counts, groups, cfm, nrep = 1, verbose =
         # pair cell name matrix
         nm <- do.call(rbind, lapply(rl, function(x) x$ii))
 
-        ml <- bplapply(seq_along(ids), function(i) {
+        ml <- papply(seq_along(ids), function(i) { try({
             if(verbose)  message(paste(i, ":", ids[i]))
             # determine genes with sufficient number of non-failed observations in other experiments
             vi <- which(rowSums(vil[, -i, drop = FALSE]) >= min(length(ids)-1, min.nonfailed))
@@ -3273,36 +3302,43 @@ calculate.individual.models <- function(counts, groups, cfm, nrep = 1, verbose =
             gc()
             #rm(list = ls(env = attr(m1@formula, ".Environment")), envir = attr(m1@formula, ".Environment"))
             return(m1)
-        }, BPPARAM = MulticoreParam(workers = n.cores))
+        })}, n.cores = n.cores) # end cell iteration
 
         # check if there were errors in the multithreaded portion
-        lapply(seq_along(ml), function(i) {
+        vic <- which(unlist(lapply(seq_along(ml), function(i) {
             if(class(ml[[i]]) == "try-error") {
-                message("ERROR encountered in building a model for cell ", ids[i], ":")
+                message("ERROR encountered in building a model for cell ", ids[i], " - skipping the cell. Error:")
                 message(ml[[i]])
-                tryCatch(stop(paste("ERROR encountered in building a model for cell ", ids[i])), error = function(e) stop(e))
+                #tryCatch(stop(paste("ERROR encountered in building a model for cell ", ids[i])), error = function(e) stop(e))
+                return(FALSE);
             }
-        })
+            return(TRUE);
+        })))
+        ml <- ml[vic]; names(ml) <- ids[vic];
 
-        if(save.plots) {
+        if(length(vic)<length(ids)) {
+          message("ERROR fitting of ", (length(ids)-length(vic)), " out of ", length(ids), " cells resulted in errors reporting remaining ", length(vic), " cells")
+        }
+
+        if(save.plots && length(ml)>0) {
             # model fits
             #CairoPNG(filename = paste(group, "model.fits.png", sep = "."), width = 1024, height = 300*length(ids))
             pdf(file = paste(group, "model.fits.pdf", sep = "."), width = ifelse(linear.fit, 15, 13), height = 4)
             #l <- layout(matrix(seq(1, 4*length(ids)), nrow = length(ids), byrow = TRUE), rep(c(1, 1, 1, 0.5), length(ids)), rep(1, 4*length(ids)), FALSE)
             l <- layout(matrix(seq(1, 4), nrow = 1, byrow = TRUE), rep(c(1, 1, 1, ifelse(linear.fit, 1, 0.5)), 1), rep(1, 4), FALSE)
             par(mar = c(3.5, 3.5, 3.5, 0.5), mgp = c(2.0, 0.65, 0), cex = 0.9)
-            invisible(lapply(seq_along(ids), function(i) {
+            invisible(lapply(seq_along(vic), function(j) {
+                i <- vic[j];
                 vi <- which(rowSums(vil[, -i, drop = FALSE]) >= min(length(ids)-1, min.nonfailed))
                 df <- data.frame(count = counts[vi, ids[i]], fpm = rowMeans(t(t(counts[vi, ids[-i], drop = FALSE])/(t.ls[-i]))))
-                plot.nb2.mixture.fit(ml[[i]], df, en = ids[i], do.par = FALSE, compressed.models = return.compressed.models)
+                plot.nb2.mixture.fit(ml[[j]], df, en = ids[i], do.par = FALSE, compressed.models = return.compressed.models)
             }))
             dev.off()
         }
-        names(ml) <- ids
 
         return(ml)
 
-    })
+    }) # end group iteration
 
     if(return.compressed.models) {
         # make a joint model matrix
@@ -3346,21 +3382,21 @@ calculate.posterior.matrices <- function(dat, ifm, prior, n.cores = 32, inner.co
     marginals <- data.frame(fpm = 10^prior$x - 1)
     marginals$fpm[marginals$fpm<0] <- 0
     lapply(ifm, function(group.ifm) {
-        bplapply(sn(names(group.ifm)), function(nam) {
+        papply(sn(names(group.ifm)), function(nam) {
             df <- get.exp.logposterior.matrix(group.ifm[[nam]], dat[, nam], marginals, n.cores = inner.cores, grid.weight = prior$grid.weight)
             rownames(df) <- rownames(dat)
             colnames(df) <- as.character(prior$x)
             return(df)
-        }, BPPARAM = MulticoreParam(workers = n.cores))
+        }, n.cores = n.cores)
     })
 }
 
 sample.posterior <- function(dat, ifm, prior, n.samples = 1, n.cores = 32) {
     marginals <- data.frame(fpm = 10^prior$x - 1)
     lapply(ifm, function(group.ifm) {
-        bplapply(sn(names(group.ifm)), function(nam) {
+        papply(sn(names(group.ifm)), function(nam) {
             get.exp.sample(group.ifm[[nam]], dat[, nam], marginals, prior.x = prior$x, n = n.samples)
-        }, BPPARAM = MulticoreParam(workers = n.cores))
+        }, n.cores = n.cores)
     })
 }
 
@@ -3368,7 +3404,7 @@ sample.posterior <- function(dat, ifm, prior, n.samples = 1, n.cores = 32) {
 # lmatl - list of posterior matrices (log scale) for individual experiments
 calculate.joint.posterior.matrix <- function(lmatl, n.samples = 100, bootstrap = TRUE, n.cores = 15) {
     if(bootstrap) {
-        jpl <- bplapply(seq_len(n.cores), function(i) jpmatLogBoot(Matl = lmatl, Nboot = ceiling(n.samples/n.cores), Seed = i), BPPARAM = MulticoreParam(workers = n.cores))
+        jpl <- papply(seq_len(n.cores), function(i) jpmatLogBoot(Matl = lmatl, Nboot = ceiling(n.samples/n.cores), Seed = i), n.cores = n.cores)
         jpl <- Reduce("+", jpl)
         jpl <- jpl/rowSums(jpl)
     } else {
@@ -3385,7 +3421,7 @@ calculate.joint.posterior.matrix <- function(lmatl, n.samples = 100, bootstrap =
 # composition - a named vector, indicating the number of samples that should be drawn from each element of lmatll to compose a group
 calculate.batch.joint.posterior.matrix <- function(lmatll, composition, n.samples = 100, n.cores = 15) {
     # reorder composition vector to match lmatll names
-    jpl <- bplapply(seq_len(n.cores), function(i) jpmatLogBatchBoot(lmatll, composition[names(lmatll)], ceiling(n.samples/n.cores), i), BPPARAM = MulticoreParam(workers = n.cores))
+    jpl <- papply(seq_len(n.cores), function(i) jpmatLogBatchBoot(lmatll, composition[names(lmatll)], ceiling(n.samples/n.cores), i), n.cores = n.cores)
     jpl <- Reduce("+", jpl)
     jpl <- jpl/rowSums(jpl)
     #jpl <- jpmatLogBatchBoot(lmatll, composition[names(lmatll)], n.samples, n.cores)
@@ -3405,7 +3441,7 @@ calculate.ratio.posterior <- function(pmat1, pmat2, prior, n.cores = 15, skip.pr
 
     chunk <- function(x, n) split(x, sort(rank(x) %% n))
     if(n.cores > 1) {
-        x <- do.call(rbind, bplapply(chunk(1:nrow(pmat1), n.cores*5), function(ii) matSlideMult(pmat1[ii, , drop = FALSE], pmat2[ii, , drop = FALSE]), BPPARAM = MulticoreParam(workers = n.cores)))
+        x <- do.call(rbind, papply(chunk(1:nrow(pmat1), n.cores*5), function(ii) matSlideMult(pmat1[ii, , drop = FALSE], pmat2[ii, , drop = FALSE]), n.cores = n.cores))
     } else {
         x <- matSlideMult(pmat1, pmat2)
     }
@@ -3498,8 +3534,8 @@ get.fpm.estimates <- function(m1, counts) {
         return(TRUE)
 
         if(n.apps > 0) {
-#            require(Rook)
-#            require(rjson)
+            require(Rook)
+            require(rjson)
             packageStartupMessage("scde: found stale web server instance with ", n.apps, " apps. restarting.")
             rm("___scde.server", envir = globalenv()) # remove old instance (apparently saved Rook servers can't just be restarted ... we'll make a new one and re-add all of the apps
 
@@ -3664,12 +3700,12 @@ plot.nb2.mixture.fit <- function(m1, rdf, en, do.par = TRUE, n.zero.windows = 50
 
 ## from nb2.crossmodels.r
 mc.stepFlexmix <- function(..., nrep = 5, n.cores = nrep, return.all = FALSE) {
-    if(nrep == 1) {
+    if(nrep < 2) {
         return(flexmix(...))
     } else {
-        ml <- bplapply(seq_len(nrep), function(m) {
+        ml <- papply(seq_len(nrep), function(m) {
             x = try(flexmix(...))
-        }, BPPARAM = MulticoreParam(workers = n.cores))
+        }, n.cores = n.cores)
         if(return.all) { return(ml) }
         ml <- ml[unlist(lapply(ml, function(x) !is(x, "try-error")))]
         logLiks <- unlist(lapply(ml, logLik))
@@ -3775,9 +3811,9 @@ get.exp.posterior.matrix <- function(m1, counts, marginals, grid.weight = rep(1,
     uc <- unique(counts)
     #message(paste("get.exp.posterior.matrix() :", round((1-length(uc)/length(counts))*100, 3), "% savings"))
     cat(".")
-    df <- do.call(rbind, bplapply(uc, function(x) {
+    df <- do.call(rbind, papply(uc, function(x) {
         rowSums(get.component.model.lik(m1, cbind(marginals, count = rep(x, nrow(marginals)))))+min.p
-    }, BPPARAM = MulticoreParam(workers = n.cores)))
+    }, n.cores = n.cores))
     if(rescale) {
         #df <- t(t(df)*grid.weight)+min.p
         df <- df/rowSums(df)
@@ -3791,9 +3827,9 @@ get.exp.logposterior.matrix <- function(m1, counts, marginals, grid.weight = rep
     uc <- unique(counts)
     #message(paste("get.exp.logposterior.matrix() :", round((1-length(uc)/length(counts))*100, 3), "% savings"))
     cat(".")
-    df <- do.call(rbind, bplapply(uc, function(x) {
+    df <- do.call(rbind, papply(uc, function(x) {
         log.row.sums(get.component.model.loglik(m1, cbind(marginals, count = rep(x, nrow(marginals)))))
-    }, BPPARAM = MulticoreParam(workers = n.cores)))
+    }, n.cores = n.cores))
     if(rescale) {
         df <- df-log.row.sums(df)
     }
@@ -3805,21 +3841,21 @@ get.exp.logposterior.matrix <- function(m1, counts, marginals, grid.weight = rep
 # similar to get.exp.posterior.matrix(), but returns inverse ecdf list
 # note that x must be supplied
 get.exp.posterior.samples <- function(pmatl, prior, n.samples = 1, n.cores = 32) {
-    sl <- bplapply(seq_along(pmatl), function(i) t(apply(pmatl[[i]], 1, function(d) approxfun(cumsum(d), prior$x, rule = 2)(runif(n.samples)))), BPPARAM = MulticoreParam(workers = n.cores))
+    sl <- papply(seq_along(pmatl), function(i) t(apply(pmatl[[i]], 1, function(d) approxfun(cumsum(d), prior$x, rule = 2)(runif(n.samples)))), n.cores = n.cores)
     names(sl) <- names(pmatl)
     sl
 }
 # similar to get.exp.posterior.matrix(), but returns inverse ecdf list
 # note that x must be supplied
 get.exp.sample <- function(m1, counts, marginals, prior.x, n, rescale = TRUE) {
-    do.call(rbind, bplapply(counts, function(x) {
+    do.call(rbind, papply(counts, function(x) {
         tpr <- log.row.sums(get.component.model.loglik(m1, cbind(marginals, count = rep(x, nrow(marginals)))))
         if(rescale)  {
             tpr <- exp(tpr-max(tpr))
             tpr <- tpr/sum(tpr)
         }
         return(approxfun(cumsum(tpr), prior.x, rule = 2)(runif(n)))
-    }, BPPARAM = MulticoreParam(workers = 10)))
+    }, n.cores=1))
 }
 
 # gets a probability of failed detection for a given observation
@@ -5024,7 +5060,7 @@ pathway.pc.correlation.distance <- function(pcc, xv, n.cores = 10, target.ndf = 
     # all relevant gene names
     rotn <- unique(unlist(lapply(pcc[gsub("^#PC\\d+# ", "", rownames(xv))], function(d) rownames(d$xp$rotation))))
     # prepare an ordered (in terms of genes) and centered version of each component
-    pl <- bplapply(rownames(xv), function(nam) {
+    pl <- papply(rownames(xv), function(nam) {
         pnam <- gsub("^#PC\\d+# ", "", nam)
         pn <- as.integer(gsub("^#PC(\\d+)# .*", "\\1", nam))
         rt <- pcc[[pnam]]$xp$rotation[, pn]
@@ -5033,7 +5069,7 @@ pathway.pc.correlation.distance <- function(pcc, xv, n.cores = 10, target.ndf = 
         mo <- order(mi, decreasing = FALSE)
         rt <- as.numeric(rt)-mean(rt)
         return(list(i = mi[mo], v = rt[mo]))
-    }, BPPARAM = MulticoreParam(workers = n.cores))
+    }, n.cores = n.cores)
 
     x <- .Call("plSemicompleteCor2", pl, PACKAGE = "scde")
 
@@ -5369,7 +5405,7 @@ ViewDiff <- setRefClass(
                     # flybase
                     geneLookupURL <<- "http://flybase.org/cgi-bin/uniq.html?db = fbgn&GeneSearch = {0}&context = {1}&species = Dmel&cs = yes&caller = genejump"
                 } else {
-                    # default, forward.D to ensemble search
+                    # default, forward to ensemble search
                     geneLookupURL <<- "http://useast.ensembl.org/Multi/Search/Results?q = {0}site = ensembl"
                 }
             } else {
@@ -5911,6 +5947,20 @@ calculate.go.enrichment <- function(genelist, universe, pvalue.cutoff = 1e-3, mi
     }
 }
 
+##' wrapper around different mclapply mechanisms
+##'
+##' Abstracts out mclapply implementation, and defaults to lapply when only one core is requested (helps with debugging)
+##' @param ... parameters to pass to lapply, mclapply, bplapply, etc.
+##' @param n.cores number of cores. If 1 core is requested, will default to lapply
+papply <- function(...,n.cores=n) {
+  if(n.cores>1) {
+    # bplapply implementation
+    bplapply(... , BPPARAM = MulticoreParam(workers = n.cores))
+  } else { # fall back on lapply
+    lapply(...);
+  }
+}
+
 
 ##' A Reference Class to represent the PAGODA application
 ##'
@@ -5919,7 +5969,7 @@ calculate.go.enrichment <- function(genelist, universe, pvalue.cutoff = 1e-3, mi
 ##'
 ##' @field results Output of the pathway clustering and redundancy reduction
 ##' @field genes List of genes to display in the Detailed clustering panel
-##' @field pathways Pathways
+##' @field pathways
 ##' @field mat Matrix of posterior mode count estimates
 ##' @field matw Matrix of weights associated with each estimate in \code{mat}
 ##' @field goenv Gene set list as an environment
@@ -5928,7 +5978,6 @@ calculate.go.enrichment <- function(genelist, universe, pvalue.cutoff = 1e-3, mi
 ##' @field trim Trim quantity used for Winsorization for visualization
 ##' @field batch Any batch or other known confounders to be included in the visualization as a column color track
 ##'
-##' @exportClass ViewPagodaApp
 ViewPagodaApp <- setRefClass(
     'ViewPagodaApp',
     fields = c('results', 'genes', 'pathways', 'mat', 'matw', 'goenv', 'renv', 'name', 'trim', 'batch'),
