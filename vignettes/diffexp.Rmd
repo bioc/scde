@@ -2,9 +2,7 @@
 title: "Getting Started with `scde`"
 author: "Peter Kharchenko, Jean Fan"
 date: '`r Sys.Date()`'
-output:
-  md_document:
-    variant: markdown_github
+output: html_document
 vignette: |
   %\VignetteIndexEntry{Vignette Title} \usepackage[utf8]{inputenc}
   %\VignetteEngine{knitr::rmarkdown}
