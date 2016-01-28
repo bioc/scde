@@ -2,10 +2,7 @@
 title: "Getting Started with `scde`"
 author: "Peter Kharchenko, Jean Fan"
 date: '`r Sys.Date()`'
-output: html_document
-vignette: |
-  %\VignetteIndexEntry{Vignette Title} \usepackage[utf8]{inputenc}
-  %\VignetteEngine{knitr::rmarkdown}
+output: pdf_document
 ---
 
 # Single-Cell Differential Expression Analysis
