@@ -1,7 +1,7 @@
 Package: scde
 Type: Package
 Title: Single Cell Differential Expression
-Version: 2.10.0
+Version: 2.10.1
 Date: 2016-01-20
 Description: The scde package implements a set of statistical methods for
     analyzing single-cell RNA-seq data. scde fits individual error models for
@@ -36,7 +36,7 @@ Imports: Rcpp (>= 0.10.4), RcppArmadillo (>= 0.5.400.2.0), mgcv, Rook,
         rjson, MASS, Cairo, RColorBrewer, edgeR, quantreg, methods,
         nnet, RMTstat, extRemes, pcaMethods, BiocParallel, parallel
 Suggests: knitr, cba, fastcluster, WGCNA, GO.db, org.Hs.eg.db, rmarkdown
-biocViews: RNASeq, StatisticalMethod, DifferentialExpression, Bayesian,
+biocViews: ImmunoOncology, RNASeq, StatisticalMethod, DifferentialExpression, Bayesian,
         Transcription, Software
 LinkingTo: Rcpp, RcppArmadillo
 VignetteBuilder: knitr
