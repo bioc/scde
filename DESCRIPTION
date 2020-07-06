@@ -24,9 +24,10 @@ Authors@R: c(
     person("Peter", "Kharchenko", role = c("aut", "cre"),
 		     email = "Peter_Kharchenko@hms.harvard.edu"),
     person("Jean", "Fan", role = "aut",
-	         email = "jeanfan@fas.harvard.edu")
+    		   email = "jeanfan@jhu.edu",     
+		   comment = c(ORCID = "0000-0002-0212-5451"))
 	         )
-Maintainer: Jean Fan <jeanfan@fas.harvard.edu>
+Maintainer: Jean Fan <jeanfan@jhu.edu>
 URL: http://pklab.med.harvard.edu/scde
 BugReports: https://github.com/hms-dbmi/scde/issues
 License: GPL-2
